@@ -274,6 +274,26 @@ var _ = Describe("AppStore (Login)", func() {
 			})
 		})
 
+		When("store API returns 5005 failure type (invalid auth code)", func() {
+			BeforeEach(func() {
+				mockClient.EXPECT().
+					Send(gomock.Any()).
+					Return(http.Result[loginResult]{
+						Data: loginResult{
+							FailureType: FailureTypeInvalidAuthCode,
+						},
+					}, nil)
+			})
+
+			It("returns ErrInvalidAuthCode error", func() {
+				_, err := as.Login(LoginInput{
+					Password: testPassword,
+					AuthCode: "123456",
+				})
+				Expect(err).To(Equal(ErrInvalidAuthCode))
+			})
+		})
+
 		When("store API returns error", func() {
 			BeforeEach(func() {
 				mockClient.EXPECT().
@@ -285,11 +305,12 @@ var _ = Describe("AppStore (Login)", func() {
 					}, nil)
 			})
 
-			It("returns error", func() {
+			It("returns error with failure type", func() {
 				_, err := as.Login(LoginInput{
 					Password: testPassword,
 				})
 				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("something went wrong (failureType: random-error)"))
 			})
 		})
 
@@ -363,10 +384,11 @@ var _ = Describe("AppStore (Login)", func() {
 				Expect(err).To(Equal(ErrAuthCodeRequired))
 			})
 
-			It("reports an incomplete verification when a code was already supplied", func() {
+			It("reports an invalid code when a code was already supplied", func() {
 				_, err := as.Login(LoginInput{Password: testPassword, AuthCode: "123456"})
 
-				Expect(err).To(MatchError("apple did not complete verification; try a fresh 2FA code"))
+				Expect(err.Error()).To(ContainSubstring("apple did not complete verification; try a fresh 2FA code"))
+				Expect(errors.Is(err, ErrInvalidAuthCode)).To(BeTrue())
 				Expect(errors.Is(err, ErrAuthCodeRequired)).To(BeFalse())
 			})
 		})

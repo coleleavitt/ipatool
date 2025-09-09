@@ -21,6 +21,7 @@ import (
 
 var (
 	ErrAuthCodeRequired = errors.New("auth code is required")
+	ErrInvalidAuthCode  = errors.New("invalid or expired 2FA code")
 )
 
 type authenticationMachineActionError struct {
@@ -413,11 +414,15 @@ func (t *appstore) parseLoginResponse(res *http.Result[loginResult], attempt int
 		retry = true
 	} else if attempt == 1 && res.Data.FailureType == FailureTypeInvalidCredentials {
 		retry = true
+	} else if res.Data.FailureType == FailureTypeInvalidAuthCode {
+		err = ErrInvalidAuthCode
+	} else if res.Data.FailureType == FailureTypeInvalidCredentials && authCode != "" {
+		err = ErrInvalidAuthCode
 	} else if res.Data.FailureType == "" && res.Data.CustomerMessage == CustomerMessageBadLogin {
 		if authCode == "" {
 			err = ErrAuthCodeRequired
 		} else {
-			err = errors.New("apple did not complete verification; try a fresh 2FA code")
+			err = fmt.Errorf("%w: apple did not complete verification; try a fresh 2FA code", ErrInvalidAuthCode)
 		}
 	} else if res.Data.FailureType == "" && res.Data.CustomerMessage == CustomerMessageAccountDisabled {
 		err = NewErrorWithMetadata(errors.New("account is disabled"), res)
@@ -425,7 +430,7 @@ func (t *appstore) parseLoginResponse(res *http.Result[loginResult], attempt int
 		if res.Data.CustomerMessage != "" {
 			err = NewErrorWithMetadata(errors.New(res.Data.CustomerMessage), res)
 		} else {
-			err = NewErrorWithMetadata(errors.New("something went wrong"), res)
+			err = NewErrorWithMetadata(fmt.Errorf("something went wrong (failureType: %s)", res.Data.FailureType), res)
 		}
 	} else if res.StatusCode != gohttp.StatusOK || res.Data.PasswordToken == "" {
 		err = fmt.Errorf("apple returned no usable authentication response (HTTP %d): missing account credentials or unexpected status; try again later or from another network", res.StatusCode)
