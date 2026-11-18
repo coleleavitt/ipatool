@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/avast/retry-go"
@@ -54,6 +55,10 @@ func loginCmd() *cobra.Command {
 					return fmt.Errorf("failed to read password: %w", err)
 				}
 				password = value
+
+				if strings.TrimSpace(password) == "" {
+					return errors.New("password cannot be empty")
+				}
 			}
 
 			dependencies.Logger.Log().Msg("preparing authentication; the first login may take a few minutes")
@@ -62,9 +67,14 @@ func loginCmd() *cobra.Command {
 
 			// nolint:wrapcheck
 			return retry.Do(func() error {
-				if errors.Is(lastErr, appstore.ErrAuthCodeRequired) && interactive {
+				if (errors.Is(lastErr, appstore.ErrAuthCodeRequired) || errors.Is(lastErr, appstore.ErrInvalidAuthCode)) && interactive {
+					prompt := "enter 2FA code: "
+					if errors.Is(lastErr, appstore.ErrInvalidAuthCode) {
+						prompt = "invalid 2FA code, please try again: "
+					}
+
 					var err error
-					authCode, err = readPrompt("enter 2FA code: ", false)
+					authCode, err = readPrompt(prompt, false)
 					if err != nil {
 						return fmt.Errorf("failed to read auth code: %w", err)
 					}
@@ -87,6 +97,12 @@ func loginCmd() *cobra.Command {
 						return nil
 					}
 
+					if errors.Is(err, appstore.ErrInvalidAuthCode) && !interactive {
+						dependencies.Logger.Log().Msg("invalid 2FA code provided; run the command again with a valid code using the `--auth-code` flag")
+
+						return nil
+					}
+
 					return err
 				}
 
@@ -101,11 +117,11 @@ func loginCmd() *cobra.Command {
 				retry.LastErrorOnly(true),
 				retry.DelayType(retry.FixedDelay),
 				retry.Delay(time.Millisecond),
-				retry.Attempts(2),
+				retry.Attempts(3),
 				retry.RetryIf(func(err error) bool {
 					lastErr = err
 
-					return errors.Is(err, appstore.ErrAuthCodeRequired)
+					return errors.Is(err, appstore.ErrAuthCodeRequired) || errors.Is(err, appstore.ErrInvalidAuthCode)
 				}),
 			)
 		},
