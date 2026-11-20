@@ -96,6 +96,38 @@ var _ = Describe("List Versions command", func() {
 			Expect(store.fetched).To(HaveLen(5))
 			Expect(versions).To(HaveLen(5))
 		})
+
+		It("reuses cached versions on the next run", func() {
+			dependencies.StateDirectory = GinkgoT().TempDir()
+
+			first, err := listVersionMetadata(context.Background(), appstore.Account{}, appstore.App{ID: 42}, "", store.ids, 2)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(store.fetched).To(HaveLen(5))
+
+			store.fetched = nil
+			store.ids = append(store.ids, "6")
+
+			second, err := listVersionMetadata(context.Background(), appstore.Account{}, appstore.App{ID: 42}, "", store.ids, 2)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(store.fetched).To(Equal([]string{"6"}))
+			Expect(second[:5]).To(Equal(first))
+		})
+
+		It("caches the versions fetched before a failure", func() {
+			dependencies.StateDirectory = GinkgoT().TempDir()
+			store.failID = "3"
+
+			_, err := listVersionMetadata(context.Background(), appstore.Account{}, appstore.App{ID: 42}, "", store.ids, 1)
+			Expect(err).To(HaveOccurred())
+
+			store.failID = ""
+			store.fetched = nil
+
+			_, err = listVersionMetadata(context.Background(), appstore.Account{}, appstore.App{ID: 42}, "", store.ids, 1)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(store.fetched).NotTo(ContainElement("1"))
+			Expect(store.fetched).NotTo(ContainElement("2"))
+		})
 	})
 })
 

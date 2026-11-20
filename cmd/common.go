@@ -31,6 +31,8 @@ type Dependencies struct {
 	CookieJar http.CookieJar
 	Keychain  keychain.Keychain
 	AppStore  appstore.AppStore
+	// StateDirectory holds session and cache files; empty disables caching.
+	StateDirectory string
 }
 
 // newLogger returns a new logger instance.
@@ -108,6 +110,7 @@ func initWithCommand(cmd *cobra.Command) {
 	dependencies.OS = operatingsystem.New()
 	dependencies.Machine = machine.New(machine.Args{OS: dependencies.OS})
 	stateDirectory := util.Must(prepareStateDirectory(dependencies.OS, dependencies.Machine.HomeDirectory()))
+	dependencies.StateDirectory = stateDirectory
 	dependencies.CookieJar = newCookieJar(stateDirectory)
 	dependencies.Keychain = newKeychain(stateDirectory, interactive)
 	dependencies.AppStore = appstore.NewAppStore(appstore.Args{

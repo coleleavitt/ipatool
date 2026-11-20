@@ -111,7 +111,7 @@ func ListVersionsCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&bundleID, "bundle-identifier", "b", "", "The bundle identifier of the target app (overrides the app ID)")
 
 	cmd.Flags().StringVar(&platformValue, "platform", "", "Platform to list versions for: iphone (iOS), ipad (iPadOS), appletv (tvOS), watchos, visionos, or macos")
-	cmd.Flags().BoolVar(&withMetadata, "with-metadata", false, "Also fetch the display version and release date of every version (recent versions come from the public catalog in one request)")
+	cmd.Flags().BoolVar(&withMetadata, "with-metadata", false, "Also fetch the display version and release date of every version (recent versions come from the public catalog in one request; older versions are cached locally after the first fetch)")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 4, "Number of version metadata requests to run at once (with --with-metadata)")
 
 	return cmd
@@ -127,7 +127,8 @@ type versionMetadata struct {
 }
 
 // listVersionMetadata takes the recent versions from the public catalog in one
-// request and fetches only the remaining versions one by one from the store.
+// request, older versions seen before from the local cache, and fetches only the
+// rest one by one from the store.
 func listVersionMetadata(
 	ctx context.Context,
 	acc appstore.Account,
@@ -137,6 +138,13 @@ func listVersionMetadata(
 	concurrency int,
 ) ([]versionMetadata, error) {
 	known := map[string]versionMetadata{}
+
+	cachePath := versionMetadataCachePath()
+
+	cache, err := loadVersionMetadataCache(cachePath)
+	if err != nil {
+		dependencies.Logger.Verbose().Err(err).Msg("ignoring version metadata cache")
+	}
 
 	catalog, err := dependencies.AppStore.CatalogVersionHistory(appstore.CatalogVersionHistoryInput{Account: acc, App: app, Platform: platform})
 	if err != nil {
@@ -155,18 +163,37 @@ func listVersionMetadata(
 	var missing []string
 
 	for _, id := range versionIDs {
-		if _, ok := known[id]; !ok {
-			missing = append(missing, id)
+		if _, ok := known[id]; ok {
+			continue
+		}
+
+		if v, ok := cache.get(app.ID, id); ok {
+			known[id] = v
+
+			continue
+		}
+
+		missing = append(missing, id)
+	}
+
+	fetched, fetchErr := fetchVersionMetadata(ctx, acc, app, platform, missing, concurrency)
+
+	for _, v := range fetched {
+		if v.DisplayVersion != "" {
+			known[v.ExternalVersionID] = v
 		}
 	}
 
-	fetched, err := fetchVersionMetadata(ctx, acc, app, platform, missing, concurrency)
-	if err != nil {
-		return nil, err
+	for _, v := range known {
+		cache.put(app.ID, v)
 	}
 
-	for _, v := range fetched {
-		known[v.ExternalVersionID] = v
+	if err := cache.save(cachePath); err != nil {
+		dependencies.Logger.Verbose().Err(err).Msg("could not save version metadata cache")
+	}
+
+	if fetchErr != nil {
+		return nil, fetchErr
 	}
 
 	results := make([]versionMetadata, len(versionIDs))
@@ -235,13 +262,10 @@ func fetchVersionMetadata(
 
 	wg.Wait()
 
+	// Partial results are returned with the error so the caller can cache them.
 	if firstErr != nil {
-		return nil, firstErr
+		return results, firstErr
 	}
 
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-
-	return results, nil
+	return results, ctx.Err()
 }
