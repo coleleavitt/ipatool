@@ -39,15 +39,15 @@ func listPurchasesCmd() *cobra.Command {
 			return err
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			infoResult, err := dependencies.AppStore.AccountInfo()
+			if err != nil {
+				return err
+			}
+
+			acc := infoResult.Account
 			var lastErr error
 
 			return retry.Do(func() error {
-				infoResult, err := dependencies.AppStore.AccountInfo()
-				if err != nil {
-					return err
-				}
-
-				acc := infoResult.Account
 				if errors.Is(lastErr, appstore.ErrPasswordTokenExpired) {
 					loginResult, err := dependencies.AppStore.Login(appstore.LoginInput{
 						Email:    acc.Email,

@@ -60,6 +60,24 @@ var _ = Describe("Purchase command", func() {
 		Expect(store.purchaseInput.App).To(Equal(appstore.App{ID: 42, BundleID: "com.example.app"}))
 	})
 
+	It("reads the account once and reuses the refreshed account on retry", func() {
+		store := &fakePurchaseAppStore{
+			loginAccount:   appstore.Account{Email: "user@example.com", PasswordToken: "refreshed-token", StoreFront: "143441"},
+			purchaseErrors: []error{appstore.ErrPasswordTokenExpired},
+		}
+		previousDependencies := dependencies
+		DeferCleanup(func() { dependencies = previousDependencies })
+		dependencies.Logger = log.NewLogger(log.Args{})
+
+		cmd := purchaseCmdWithAppStore(func() appstore.AppStore { return store })
+		cmd.SetArgs([]string{"-i", "123456789"})
+
+		Expect(cmd.Execute()).To(Succeed())
+		Expect(store.accountInfoCalls).To(Equal(1))
+		Expect(store.loginInputs).To(Equal([]appstore.LoginInput{{Email: "user@example.com", Password: "password"}}))
+		Expect(store.purchaseInput.Account).To(Equal(store.loginAccount))
+	})
+
 	It("propagates macOS to lookup and purchase", func() {
 		store := &fakePurchaseAppStore{}
 		previousDependencies := dependencies
@@ -78,17 +96,25 @@ var _ = Describe("Purchase command", func() {
 })
 
 type fakePurchaseAppStore struct {
-	lookupCalls   int
-	lookupInput   appstore.LookupInput
-	purchaseInput appstore.PurchaseInput
+	accountInfoCalls int
+	loginAccount     appstore.Account
+	loginInputs      []appstore.LoginInput
+	lookupCalls      int
+	lookupInput      appstore.LookupInput
+	purchaseErrors   []error
+	purchaseInput    appstore.PurchaseInput
 }
 
-func (*fakePurchaseAppStore) Login(input appstore.LoginInput) (appstore.LoginOutput, error) {
-	return appstore.LoginOutput{}, nil
+func (f *fakePurchaseAppStore) Login(input appstore.LoginInput) (appstore.LoginOutput, error) {
+	f.loginInputs = append(f.loginInputs, input)
+
+	return appstore.LoginOutput{Account: f.loginAccount}, nil
 }
 
-func (*fakePurchaseAppStore) AccountInfo() (appstore.AccountInfoOutput, error) {
-	return appstore.AccountInfoOutput{Account: appstore.Account{StoreFront: "143441"}}, nil
+func (f *fakePurchaseAppStore) AccountInfo() (appstore.AccountInfoOutput, error) {
+	f.accountInfoCalls++
+
+	return appstore.AccountInfoOutput{Account: appstore.Account{Email: "user@example.com", Password: "password", StoreFront: "143441"}}, nil
 }
 
 func (*fakePurchaseAppStore) Revoke() error { return nil }
@@ -111,7 +137,14 @@ func (*fakePurchaseAppStore) OwnedApps(input appstore.OwnedAppsInput) (appstore.
 func (f *fakePurchaseAppStore) Purchase(input appstore.PurchaseInput) error {
 	f.purchaseInput = input
 
-	return nil
+	if len(f.purchaseErrors) == 0 {
+		return nil
+	}
+
+	err := f.purchaseErrors[0]
+	f.purchaseErrors = f.purchaseErrors[1:]
+
+	return err
 }
 
 func (*fakePurchaseAppStore) Download(input appstore.DownloadInput) (appstore.DownloadOutput, error) {
