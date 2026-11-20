@@ -1,6 +1,7 @@
 package appstore
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -33,6 +34,10 @@ func (t *appstore) storeAMDProof(ctx context.Context, endpoint string, hardwareI
 	proof, state, err := storeauth.StoreAMDHeaders(ctx, t.anisetteState, endpoint, hardwareID)
 	if err != nil {
 		return nil, fmt.Errorf("generate Store AMD proof: %w", err)
+	}
+
+	if bytes.Equal(state, t.anisetteState) {
+		return proof, nil
 	}
 
 	if t.keychain == nil {
