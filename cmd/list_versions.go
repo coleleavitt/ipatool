@@ -1,7 +1,10 @@
 package cmd
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"time"
 
 	"github.com/avast/retry-go"
@@ -15,6 +18,8 @@ func ListVersionsCmd() *cobra.Command {
 		appID         int64
 		bundleID      string
 		platformValue string
+		withMetadata  bool
+		concurrency   int
 	)
 
 	cmd := &cobra.Command{
@@ -23,6 +28,10 @@ func ListVersionsCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if appID == 0 && bundleID == "" {
 				return errors.New("either the app ID or the bundle identifier must be specified")
+			}
+
+			if concurrency < 1 {
+				return errors.New("concurrency must be at least 1")
 			}
 
 			platform, err := appstore.ParsePlatform(platformValue)
@@ -68,11 +77,20 @@ func ListVersionsCmd() *cobra.Command {
 					return err
 				}
 
-				dependencies.Logger.Log().
+				event := dependencies.Logger.Log().
 					Interface("externalVersionIdentifiers", out.ExternalVersionIdentifiers).
-					Str("bundleID", app.BundleID).
-					Bool("success", true).
-					Send()
+					Str("bundleID", app.BundleID)
+
+				if withMetadata {
+					versions, err := fetchVersionMetadata(cmd.Context(), acc, app, platform, out.ExternalVersionIdentifiers, concurrency)
+					if err != nil {
+						return err
+					}
+
+					event = event.Interface("versions", versions)
+				}
+
+				event.Bool("success", true).Send()
 
 				return nil
 			},
@@ -93,6 +111,83 @@ func ListVersionsCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&bundleID, "bundle-identifier", "b", "", "The bundle identifier of the target app (overrides the app ID)")
 
 	cmd.Flags().StringVar(&platformValue, "platform", "", "Platform to list versions for: iphone (iOS), ipad (iPadOS), appletv (tvOS), watchos, visionos, or macos")
+	cmd.Flags().BoolVar(&withMetadata, "with-metadata", false, "Also fetch the display version and release date of every version")
+	cmd.Flags().IntVar(&concurrency, "concurrency", 4, "Number of version metadata requests to run at once (with --with-metadata)")
 
 	return cmd
+}
+
+type versionMetadata struct {
+	ExternalVersionID string    `json:"externalVersionID"`
+	DisplayVersion    string    `json:"displayVersion"`
+	ReleaseDate       time.Time `json:"releaseDate"`
+}
+
+func fetchVersionMetadata(
+	ctx context.Context,
+	acc appstore.Account,
+	app appstore.App,
+	platform appstore.Platform,
+	versionIDs []string,
+	concurrency int,
+) ([]versionMetadata, error) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	results := make([]versionMetadata, len(versionIDs))
+	sem := make(chan struct{}, concurrency)
+
+	var (
+		wg       sync.WaitGroup
+		errOnce  sync.Once
+		firstErr error
+	)
+
+	for i, id := range versionIDs {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+		}
+
+		if ctx.Err() != nil {
+			break
+		}
+
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			out, err := dependencies.AppStore.GetVersionMetadata(appstore.GetVersionMetadataInput{
+				Context:   ctx,
+				Account:   acc,
+				App:       app,
+				VersionID: id,
+				Platform:  platform,
+			})
+			if err != nil {
+				errOnce.Do(func() {
+					firstErr = fmt.Errorf("failed to get metadata for version %s: %w", id, err)
+					cancel()
+				})
+
+				return
+			}
+
+			results[i] = versionMetadata{ExternalVersionID: id, DisplayVersion: out.DisplayVersion, ReleaseDate: out.ReleaseDate}
+		}()
+	}
+
+	wg.Wait()
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	return results, nil
 }
