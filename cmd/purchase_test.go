@@ -128,6 +128,10 @@ func (*fakePurchaseAppStore) GetVersionMetadata(input appstore.GetVersionMetadat
 	return appstore.GetVersionMetadataOutput{}, nil
 }
 
+func (*fakePurchaseAppStore) CatalogVersionHistory(appstore.CatalogVersionHistoryInput) (appstore.CatalogVersionHistoryOutput, error) {
+	return appstore.CatalogVersionHistoryOutput{}, nil
+}
+
 func (*fakePurchaseAppStore) Bag(input appstore.BagInput) (appstore.BagOutput, error) {
 	return appstore.BagOutput{}, nil
 }

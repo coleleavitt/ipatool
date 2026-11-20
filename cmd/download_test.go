@@ -363,6 +363,10 @@ func (*fakeDownloadAppStore) GetVersionMetadata(input appstore.GetVersionMetadat
 	return appstore.GetVersionMetadataOutput{}, nil
 }
 
+func (*fakeDownloadAppStore) CatalogVersionHistory(appstore.CatalogVersionHistoryInput) (appstore.CatalogVersionHistoryOutput, error) {
+	return appstore.CatalogVersionHistoryOutput{}, nil
+}
+
 func (*fakeDownloadAppStore) Bag(input appstore.BagInput) (appstore.BagOutput, error) {
 	return appstore.BagOutput{}, nil
 }

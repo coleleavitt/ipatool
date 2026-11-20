@@ -82,7 +82,7 @@ func ListVersionsCmd() *cobra.Command {
 					Str("bundleID", app.BundleID)
 
 				if withMetadata {
-					versions, err := fetchVersionMetadata(cmd.Context(), acc, app, platform, out.ExternalVersionIdentifiers, concurrency)
+					versions, err := listVersionMetadata(cmd.Context(), acc, app, platform, out.ExternalVersionIdentifiers, concurrency)
 					if err != nil {
 						return err
 					}
@@ -111,7 +111,7 @@ func ListVersionsCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&bundleID, "bundle-identifier", "b", "", "The bundle identifier of the target app (overrides the app ID)")
 
 	cmd.Flags().StringVar(&platformValue, "platform", "", "Platform to list versions for: iphone (iOS), ipad (iPadOS), appletv (tvOS), watchos, visionos, or macos")
-	cmd.Flags().BoolVar(&withMetadata, "with-metadata", false, "Also fetch the display version and release date of every version")
+	cmd.Flags().BoolVar(&withMetadata, "with-metadata", false, "Also fetch the display version and release date of every version (recent versions come from the public catalog in one request)")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 4, "Number of version metadata requests to run at once (with --with-metadata)")
 
 	return cmd
@@ -121,6 +121,60 @@ type versionMetadata struct {
 	ExternalVersionID string    `json:"externalVersionID"`
 	DisplayVersion    string    `json:"displayVersion"`
 	ReleaseDate       time.Time `json:"releaseDate"`
+	// Source is "catalog" (public App Store catalog, release date as shown on the
+	// store page) or "store" (per-version store request, release date from the package).
+	Source string `json:"source"`
+}
+
+// listVersionMetadata takes the recent versions from the public catalog in one
+// request and fetches only the remaining versions one by one from the store.
+func listVersionMetadata(
+	ctx context.Context,
+	acc appstore.Account,
+	app appstore.App,
+	platform appstore.Platform,
+	versionIDs []string,
+	concurrency int,
+) ([]versionMetadata, error) {
+	known := map[string]versionMetadata{}
+
+	catalog, err := dependencies.AppStore.CatalogVersionHistory(appstore.CatalogVersionHistoryInput{Account: acc, App: app, Platform: platform})
+	if err != nil {
+		dependencies.Logger.Verbose().Err(err).Msg("catalog version history unavailable; fetching every version from the store")
+	}
+
+	for _, v := range catalog.Versions {
+		known[v.ExternalVersionID] = versionMetadata{
+			ExternalVersionID: v.ExternalVersionID,
+			DisplayVersion:    v.DisplayVersion,
+			ReleaseDate:       v.ReleaseDate,
+			Source:            "catalog",
+		}
+	}
+
+	var missing []string
+
+	for _, id := range versionIDs {
+		if _, ok := known[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+
+	fetched, err := fetchVersionMetadata(ctx, acc, app, platform, missing, concurrency)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, v := range fetched {
+		known[v.ExternalVersionID] = v
+	}
+
+	results := make([]versionMetadata, len(versionIDs))
+	for i, id := range versionIDs {
+		results[i] = known[id]
+	}
+
+	return results, nil
 }
 
 func fetchVersionMetadata(
@@ -175,7 +229,7 @@ func fetchVersionMetadata(
 				return
 			}
 
-			results[i] = versionMetadata{ExternalVersionID: id, DisplayVersion: out.DisplayVersion, ReleaseDate: out.ReleaseDate}
+			results[i] = versionMetadata{ExternalVersionID: id, DisplayVersion: out.DisplayVersion, ReleaseDate: out.ReleaseDate, Source: "store"}
 		}()
 	}
 

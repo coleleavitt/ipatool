@@ -38,6 +38,8 @@ type AppStore interface {
 	ListVersions(input ListVersionsInput) (ListVersionsOutput, error)
 	// GetVersionMetadata returns the metadata for the specified version.
 	GetVersionMetadata(input GetVersionMetadataInput) (GetVersionMetadataOutput, error)
+	// CatalogVersionHistory returns the most recent versions listed in the public App Store catalog.
+	CatalogVersionHistory(input CatalogVersionHistoryInput) (CatalogVersionHistoryOutput, error)
 	// Bag fetches the bag which contains endpoint definitions.
 	Bag(input BagInput) (BagOutput, error)
 }

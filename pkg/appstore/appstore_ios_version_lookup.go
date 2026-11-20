@@ -24,8 +24,9 @@ type catalogVersionLookupItem struct {
 }
 
 type catalogVersionPlatformAttributes struct {
-	BundleID          string                    `json:"bundleId,omitempty"`
-	ExternalVersionID platformVersionExternalID `json:"externalVersionId,omitempty"`
+	BundleID          string                      `json:"bundleId,omitempty"`
+	ExternalVersionID platformVersionExternalID   `json:"externalVersionId,omitempty"`
+	VersionHistory    []catalogVersionHistoryItem `json:"versionHistory,omitempty"`
 }
 
 func (t *appstore) lookupLatestIOSExternalVersionID(app App, countryCode string, platform Platform) (string, error) {

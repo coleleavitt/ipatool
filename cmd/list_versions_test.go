@@ -72,6 +72,30 @@ var _ = Describe("List Versions command", func() {
 
 			Expect(cmd.Execute()).To(MatchError(ContainSubstring("failed to get metadata for version 3")))
 		})
+
+		It("takes catalog versions from one request and fetches only the rest", func() {
+			store.catalog = []appstore.CatalogVersion{
+				{ExternalVersionID: "5", DisplayVersion: "5.0"},
+				{ExternalVersionID: "4", DisplayVersion: "4.0"},
+			}
+
+			versions, err := listVersionMetadata(context.Background(), appstore.Account{}, appstore.App{ID: 42}, "", store.ids, 2)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(store.fetched).To(ConsistOf("1", "2", "3"))
+			Expect(versions[3]).To(Equal(versionMetadata{ExternalVersionID: "4", DisplayVersion: "4.0", Source: "catalog"}))
+			Expect(versions[0]).To(Equal(versionMetadata{ExternalVersionID: "1", DisplayVersion: "v1", Source: "store"}))
+		})
+
+		It("fetches every version from the store when the catalog fails", func() {
+			store.catalogErr = errors.New("catalog down")
+
+			versions, err := listVersionMetadata(context.Background(), appstore.Account{}, appstore.App{ID: 42}, "", store.ids, 2)
+
+			Expect(err).NotTo(HaveOccurred())
+			Expect(store.fetched).To(HaveLen(5))
+			Expect(versions).To(HaveLen(5))
+		})
 	})
 })
 
@@ -79,9 +103,16 @@ type fakeListVersionsMetadataAppStore struct {
 	appstore.AppStore
 	ids         []string
 	failID      string
+	catalog     []appstore.CatalogVersion
+	catalogErr  error
+	fetched     []string
 	mu          sync.Mutex
 	inFlight    int
 	maxInFlight int
+}
+
+func (s *fakeListVersionsMetadataAppStore) CatalogVersionHistory(appstore.CatalogVersionHistoryInput) (appstore.CatalogVersionHistoryOutput, error) {
+	return appstore.CatalogVersionHistoryOutput{Versions: s.catalog}, s.catalogErr
 }
 
 func (*fakeListVersionsMetadataAppStore) AccountInfo() (appstore.AccountInfoOutput, error) {
@@ -96,6 +127,7 @@ func (s *fakeListVersionsMetadataAppStore) GetVersionMetadata(input appstore.Get
 	s.mu.Lock()
 	s.inFlight++
 	s.maxInFlight = max(s.maxInFlight, s.inFlight)
+	s.fetched = append(s.fetched, input.VersionID)
 	s.mu.Unlock()
 
 	time.Sleep(20 * time.Millisecond)

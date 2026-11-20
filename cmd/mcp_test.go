@@ -653,6 +653,10 @@ func (s *fakeMCPAppStore) GetVersionMetadata(input appstore.GetVersionMetadataIn
 	return s.getVersionMetadata(input)
 }
 
+func (*fakeMCPAppStore) CatalogVersionHistory(appstore.CatalogVersionHistoryInput) (appstore.CatalogVersionHistoryOutput, error) {
+	return appstore.CatalogVersionHistoryOutput{}, nil
+}
+
 func (s *fakeMCPAppStore) Purchase(input appstore.PurchaseInput) error {
 	return s.purchase(input)
 }
