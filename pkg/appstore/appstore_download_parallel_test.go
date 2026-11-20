@@ -76,9 +76,10 @@ func newParallelDownloadFixture(size int64) *parallelDownloadFixture {
 			rangeHeader: request.Header.Get("Range"),
 			validator:   request.Header.Get("If-Range"),
 		})
+		handler := fixture.handler
 		fixture.mu.Unlock()
 
-		fixture.handler(writer, request)
+		handler(writer, request)
 	}))
 	DeferCleanup(fixture.server.Close)
 
@@ -91,6 +92,13 @@ func (fixture *parallelDownloadFixture) serve(writer http.ResponseWriter, reques
 	}
 
 	http.ServeContent(writer, request, "app.ipa", time.Time{}, io.NewSectionReader(seed, 0, fixture.size))
+}
+
+func (fixture *parallelDownloadFixture) setHandler(handler http.HandlerFunc) {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+
+	fixture.handler = handler
 }
 
 func (fixture *parallelDownloadFixture) recordedRequests() []downloadFixtureRequest {
@@ -174,10 +182,10 @@ var _ = Describe("automatic parallel downloads", func() {
 	It("keeps one stream when the server ignores the initial range", func() {
 		fixture := newParallelDownloadFixture(parallelDownloadThreshold)
 		fixture.writePrefix(4096)
-		fixture.handler = func(writer http.ResponseWriter, request *http.Request) {
+		fixture.setHandler(func(writer http.ResponseWriter, request *http.Request) {
 			request.Header.Del("Range")
 			fixture.serve(writer, request, 1, `"fixture"`)
-		}
+		})
 
 		Expect(fixture.store.downloadFile(context.Background(), fixture.server.URL, fixture.path, nil)).To(Succeed())
 		fixture.expectContents(1)
@@ -186,7 +194,7 @@ var _ = Describe("automatic parallel downloads", func() {
 
 	DescribeTable("falls back to one stream without appending invalid staged bytes", func(status int, contentRange string, body string) {
 		fixture := newParallelDownloadFixture(parallelDownloadThreshold)
-		fixture.handler = func(writer http.ResponseWriter, request *http.Request) {
+		fixture.setHandler(func(writer http.ResponseWriter, request *http.Request) {
 			if strings.HasSuffix(request.Header.Get("Range"), "-") {
 				fixture.serve(writer, request, 1, `"fixture"`)
 
@@ -196,7 +204,7 @@ var _ = Describe("automatic parallel downloads", func() {
 			writer.Header().Set("Content-Range", contentRange)
 			writer.WriteHeader(status)
 			_, _ = io.WriteString(writer, body)
-		}
+		})
 
 		Expect(fixture.store.downloadFile(context.Background(), fixture.server.URL, fixture.path, nil)).To(Succeed())
 		fixture.expectContents(1)
@@ -215,7 +223,7 @@ var _ = Describe("automatic parallel downloads", func() {
 	It("restarts the fallback when If-Range detects a changed representation", func() {
 		fixture := newParallelDownloadFixture(parallelDownloadThreshold)
 		var requests atomic.Int64
-		fixture.handler = func(writer http.ResponseWriter, request *http.Request) {
+		fixture.setHandler(func(writer http.ResponseWriter, request *http.Request) {
 			if requests.Add(1) == 1 {
 				fixture.serve(writer, request, 1, `"old"`)
 
@@ -223,7 +231,7 @@ var _ = Describe("automatic parallel downloads", func() {
 			}
 
 			fixture.serve(writer, request, 2, `"new"`)
-		}
+		})
 
 		Expect(fixture.store.downloadFile(context.Background(), fixture.server.URL, fixture.path, nil)).To(Succeed())
 		fixture.expectContents(2)
@@ -231,9 +239,9 @@ var _ = Describe("automatic parallel downloads", func() {
 
 	DescribeTable("keeps a single stream without a strong validator", func(validator string) {
 		fixture := newParallelDownloadFixture(parallelDownloadThreshold)
-		fixture.handler = func(writer http.ResponseWriter, request *http.Request) {
+		fixture.setHandler(func(writer http.ResponseWriter, request *http.Request) {
 			fixture.serve(writer, request, 1, validator)
-		}
+		})
 
 		Expect(fixture.store.downloadFile(context.Background(), fixture.server.URL, fixture.path, nil)).To(Succeed())
 		fixture.expectContents(1)
@@ -245,7 +253,7 @@ var _ = Describe("automatic parallel downloads", func() {
 
 	It("falls back when a valid range response is truncated mid-body", func() {
 		fixture := newParallelDownloadFixture(parallelDownloadThreshold)
-		fixture.handler = func(writer http.ResponseWriter, request *http.Request) {
+		fixture.setHandler(func(writer http.ResponseWriter, request *http.Request) {
 			value := request.Header.Get("Range")
 			if strings.HasSuffix(value, "-") {
 				fixture.serve(writer, request, 1, `"fixture"`)
@@ -258,7 +266,7 @@ var _ = Describe("automatic parallel downloads", func() {
 			writer.WriteHeader(http.StatusPartialContent)
 			writer.(http.Flusher).Flush()
 			_, _ = io.WriteString(writer, "truncated")
-		}
+		})
 
 		Expect(fixture.store.downloadFile(context.Background(), fixture.server.URL, fixture.path, nil)).To(Succeed())
 		fixture.expectContents(1)
@@ -270,7 +278,7 @@ var _ = Describe("automatic parallel downloads", func() {
 	It("resumes the first stream after a disconnect and resets staged progress", func() {
 		fixture := newParallelDownloadFixture(parallelDownloadThreshold)
 		var first atomic.Bool
-		fixture.handler = func(writer http.ResponseWriter, request *http.Request) {
+		fixture.setHandler(func(writer http.ResponseWriter, request *http.Request) {
 			if first.CompareAndSwap(false, true) {
 				writer.Header().Set("ETag", `"fixture"`)
 				writer.Header().Set("Content-Length", fmt.Sprint(fixture.size))
@@ -282,7 +290,7 @@ var _ = Describe("automatic parallel downloads", func() {
 			}
 
 			fixture.serve(writer, request, 1, `"fixture"`)
-		}
+		})
 
 		progress := progressbar.NewOptions64(1, progressbar.OptionSetWriter(io.Discard))
 		Expect(fixture.store.downloadFile(context.Background(), fixture.server.URL, fixture.path, progress)).To(Succeed())
@@ -297,7 +305,7 @@ var _ = Describe("automatic parallel downloads", func() {
 		fixture := newParallelDownloadFixture(parallelDownloadThreshold)
 		var interrupted atomic.Bool
 		interrupted.Store(true)
-		fixture.handler = func(writer http.ResponseWriter, request *http.Request) {
+		fixture.setHandler(func(writer http.ResponseWriter, request *http.Request) {
 			if interrupted.Load() && strings.HasSuffix(request.Header.Get("Range"), "-") {
 				writer.Header().Set("ETag", `"fixture"`)
 				writer.Header().Set("Content-Length", fmt.Sprint(fixture.size))
@@ -311,7 +319,7 @@ var _ = Describe("automatic parallel downloads", func() {
 			}
 
 			fixture.serve(writer, request, 1, `"fixture"`)
-		}
+		})
 
 		ctx, cancel := context.WithCancel(context.Background())
 		DeferCleanup(cancel)
@@ -376,7 +384,7 @@ var _ = Describe("automatic parallel downloads", func() {
 		fixture := newParallelDownloadFixture(parallelDownloadThreshold)
 		var interrupted atomic.Bool
 		interrupted.Store(true)
-		fixture.handler = func(writer http.ResponseWriter, request *http.Request) {
+		fixture.setHandler(func(writer http.ResponseWriter, request *http.Request) {
 			if interrupted.Load() && strings.HasSuffix(request.Header.Get("Range"), "-") {
 				writer.Header().Set("ETag", `"fixture"`)
 				writer.Header().Set("Content-Length", fmt.Sprint(fixture.size))
@@ -390,7 +398,7 @@ var _ = Describe("automatic parallel downloads", func() {
 			}
 
 			fixture.serve(writer, request, 1, `"fixture"`)
-		}
+		})
 
 		executable, err := os.Executable()
 		Expect(err).NotTo(HaveOccurred())
